@@ -15,14 +15,55 @@
             position: absolute;
             pointer-events: none;
         }
+        .preview-dialog {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 1px solid black;
+            padding: 10px;
+            background-color: white;
+            z-index: 1000;
+            overflow: auto;
+            max-height: 80%;
+            max-width: 80%;
+        }
+        .preview-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+        }
+        .preview-canvas-container {
+            margin-bottom: 20px;
+        }
+        .close-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1001;
+        }
     </style>
 </head>
 <body>
     <h1>PDF Text Splitter</h1>
     <input type="file" id="file-input">
+    <br>
     <canvas id="pdf-canvas"></canvas>
-    <div id="output"></div>
+    <br>
     <button id="split-button">Split PDF</button>
+    <div id="output"></div>
+
+    <div id="preview-overlay" class="preview-overlay"></div>
+    <div id="preview-dialog" class="preview-dialog">
+        <button class="close-button" onclick="closePreview()">Close</button>
+        <div id="preview-canvas-container"></div>
+    </div>
 
     <script>
         let pdfDoc = null;
@@ -111,6 +152,7 @@
             let splitGroups = [];
             let currentGroup = [];
             let lastText = '';
+            let textSnippets = [];
 
             for (let i = 1; i <= pdfDoc.numPages; i++) {
                 textPromises.push(pdfDoc.getPage(i).then(function(page) {
@@ -135,6 +177,7 @@
                         if (pageText !== lastText) {
                             if (currentGroup.length > 0) {
                                 splitGroups.push(currentGroup);
+                                textSnippets.push(lastText);
                             }
                             currentGroup = [i];
                             lastText = pageText;
@@ -148,14 +191,22 @@
             await Promise.all(textPromises);
             if (currentGroup.length > 0) {
                 splitGroups.push(currentGroup);
+                textSnippets.push(lastText);
             }
-            createPDFs(splitGroups, pdfBytes);
+            createPDFs(splitGroups, textSnippets, pdfBytes);
         }
 
-        async function createPDFs(groups, pdfBytes) {
+        async function createPDFs(groups, textSnippets, pdfBytes) {
             const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
             const output = document.getElementById('output');
-            output.innerHTML = '';
+            output.innerHTML = '<ul>';
+
+            output.addEventListener('click', function(event) {
+                if (event.target.tagName === 'BUTTON' && event.target.textContent === 'Preview') {
+                    const previewUrl = event.target.getAttribute('data-url');
+                    previewPDF(previewUrl);
+                }
+            });
 
             for (let i = 0; i < groups.length; i++) {
                 const newPdfDoc = await PDFLib.PDFDocument.create();
@@ -167,14 +218,66 @@
                 const newPdfBytes = await newPdfDoc.save();
                 const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
                 const url = URL.createObjectURL(blob);
+                const listItem = document.createElement('li');
+
                 const link = document.createElement('a');
                 link.href = url;
                 link.download = `split_part_${i + 1}.pdf`;
                 link.textContent = `Download split_part_${i + 1}.pdf`;
-                const div = document.createElement('div');
-                div.appendChild(link);
-                output.appendChild(div);
+
+                const snippetSpan = document.createElement('span');
+                snippetSpan.textContent = ` (Snippet: ${textSnippets[i]})`;
+
+                const previewButton = document.createElement('button');
+                previewButton.textContent = 'Preview';
+                previewButton.setAttribute('data-url', url);
+                previewButton.style.zIndex = '1001'; // ボタンを前面に表示
+
+                listItem.appendChild(link);
+                listItem.appendChild(snippetSpan);
+                listItem.appendChild(previewButton);
+                output.appendChild(listItem);
             }
+
+            output.innerHTML += '</ul>';
+        }
+
+        function previewPDF(url) {
+            const previewCanvasContainer = document.getElementById('preview-canvas-container');
+            previewCanvasContainer.innerHTML = ''; // Clear previous content
+            const previewDialog = document.getElementById('preview-dialog');
+            const previewOverlay = document.getElementById('preview-overlay');
+            previewOverlay.style.display = 'block';
+            previewDialog.style.display = 'block';
+
+            pdfjsLib.getDocument(url).promise.then(function(pdf) {
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    pdf.getPage(pageNum).then(function(page) {
+                        let viewport = page.getViewport({ scale: 1 });
+                        let previewCanvas = document.createElement('canvas');
+                        previewCanvas.height = viewport.height;
+                        previewCanvas.width = viewport.width;
+                        previewCanvas.classList.add('preview-canvas-container');
+
+                        let previewCtx = previewCanvas.getContext('2d');
+
+                        let renderContext = {
+                            canvasContext: previewCtx,
+                            viewport: viewport
+                        };
+                        page.render(renderContext);
+
+                        previewCanvasContainer.appendChild(previewCanvas);
+                    });
+                }
+            });
+        }
+
+        function closePreview() {
+            const previewDialog = document.getElementById('preview-dialog');
+            const previewOverlay = document.getElementById('preview-overlay');
+            previewDialog.style.display = 'none';
+            previewOverlay.style.display = 'none';
         }
     </script>
 </body>
