@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PDF Text Splitter</title>
+    <script src="https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.min.js"></script>
+    <script src="https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.worker.js"></script>
+    <script src="https://unpkg.com/pdf-lib"></script>
+    <style>
+        #pdf-canvas {
+            border: 1px solid black;
+            position: relative;
+        }
+        .selection-box {
+            border: 2px dashed red;
+            position: absolute;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>PDF Text Splitter</h1>
+    <input type="file" id="file-input">
+    <canvas id="pdf-canvas"></canvas>
+    <div id="output"></div>
+    <button id="split-button">Split PDF</button>
+
+    <script>
+        let pdfDoc = null;
+        let pdfBytes = null;
+        let canvas = document.getElementById('pdf-canvas');
+        let ctx = canvas.getContext('2d');
+        let selectionBox = document.createElement('div');
+        selectionBox.classList.add('selection-box');
+        document.body.appendChild(selectionBox);
+        let isSelecting = false;
+        let startX, startY, endX, endY;
+
+        document.getElementById('file-input').addEventListener('change', function(event) {
+            let file = event.target.files[0];
+            let reader = new FileReader();
+
+            reader.onload = function() {
+                pdfBytes = new Uint8Array(this.result);
+                pdfjsLib.getDocument(pdfBytes).promise.then(function(pdf) {
+                    pdfDoc = pdf;
+                    renderPage(1);
+                });
+            };
+
+            reader.readAsArrayBuffer(file);
+        });
+
+        function renderPage(pageNumber) {
+            pdfDoc.getPage(pageNumber).then(function(page) {
+                let viewport = page.getViewport({ scale: 1 });
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                let renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                page.render(renderContext);
+            });
+        }
+
+        canvas.addEventListener('mousedown', function(event) {
+            isSelecting = true;
+            startX = event.offsetX;
+            startY = event.offsetY;
+            selectionBox.style.left = `${startX + canvas.offsetLeft}px`;
+            selectionBox.style.top = `${startY + canvas.offsetTop}px`;
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+            selectionBox.style.display = 'block';
+        });
+
+        canvas.addEventListener('mousemove', function(event) {
+            if (isSelecting) {
+                endX = event.offsetX;
+                endY = event.offsetY;
+                selectionBox.style.width = `${Math.abs(endX - startX)}px`;
+                selectionBox.style.height = `${Math.abs(endY - startY)}px`;
+                selectionBox.style.left = `${Math.min(startX, endX) + canvas.offsetLeft}px`;
+                selectionBox.style.top = `${Math.min(startY, endY) + canvas.offsetTop}px`;
+            }
+        });
+
+        canvas.addEventListener('mouseup', function(event) {
+            isSelecting = false;
+        });
+
+        document.getElementById('split-button').addEventListener('click', function() {
+            if (!pdfDoc) {
+                alert('Please select a PDF file.');
+                return;
+            }
+
+            let selection = {
+                x: parseFloat(selectionBox.style.left) - canvas.offsetLeft,
+                y: parseFloat(selectionBox.style.top) - canvas.offsetTop,
+                width: parseFloat(selectionBox.style.width),
+                height: parseFloat(selectionBox.style.height)
+            };
+
+            extractTextAndSplit(selection);
+        });
+
+        async function extractTextAndSplit(selection) {
+            let textPromises = [];
+            let splitGroups = [];
+            let currentGroup = [];
+            let lastText = '';
+
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+                textPromises.push(pdfDoc.getPage(i).then(function(page) {
+                    return page.getTextContent().then(function(textContent) {
+                        let viewport = page.getViewport({ scale: 1 });
+                        let pageText = textContent.items.map(function(item) {
+                            let tx = item.transform;
+                            let x = tx[4];
+                            let y = viewport.height - tx[5];
+                            return {
+                                str: item.str,
+                                x: x,
+                                y: y
+                            };
+                        }).filter(function(item) {
+                            return item.x >= selection.x &&
+                                   item.x <= selection.x + selection.width &&
+                                   item.y >= selection.y &&
+                                   item.y <= selection.y + selection.height;
+                        }).map(item => item.str).join(' ');
+
+                        if (pageText !== lastText) {
+                            if (currentGroup.length > 0) {
+                                splitGroups.push(currentGroup);
+                            }
+                            currentGroup = [i];
+                            lastText = pageText;
+                        } else {
+                            currentGroup.push(i);
+                        }
+                    });
+                }));
+            }
+
+            await Promise.all(textPromises);
+            if (currentGroup.length > 0) {
+                splitGroups.push(currentGroup);
+            }
+            createPDFs(splitGroups, pdfBytes);
+        }
+
+        async function createPDFs(groups, pdfBytes) {
+            const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
+            const output = document.getElementById('output');
+            output.innerHTML = '';
+
+            for (let i = 0; i < groups.length; i++) {
+                const newPdfDoc = await PDFLib.PDFDocument.create();
+                const pagesToInclude = await newPdfDoc.copyPages(pdfDoc, groups[i].map(p => p - 1));
+                pagesToInclude.forEach(page => {
+                    newPdfDoc.addPage(page);
+                });
+
+                const newPdfBytes = await newPdfDoc.save();
+                const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `split_part_${i + 1}.pdf`;
+                link.textContent = `Download split_part_${i + 1}.pdf`;
+                const div = document.createElement('div');
+                div.appendChild(link);
+                output.appendChild(div);
+            }
+        }
+    </script>
+</body>
+</html>
