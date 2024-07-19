@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>PDF Text Splitter</title>
     <script src="https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.min.js"></script>
@@ -10,11 +11,18 @@
             border: 1px solid black;
             position: relative;
         }
+
+        .file-input-container {
+            display: flex;
+            align-items: center;
+        }
+
         .selection-box {
             border: 2px dashed red;
             position: absolute;
             pointer-events: none;
         }
+
         .preview-dialog {
             display: none;
             position: fixed;
@@ -29,6 +37,7 @@
             max-height: 80%;
             max-width: 80%;
         }
+
         .preview-overlay {
             display: none;
             position: fixed;
@@ -39,31 +48,43 @@
             background: rgba(0, 0, 0, 0.5);
             z-index: 999;
         }
+
         .preview-canvas-container {
             margin-bottom: 20px;
         }
+
         .close-button {
-            position: absolute;
+            position: sticky;
             top: 10px;
             right: 10px;
             z-index: 1001;
+            margin-left: auto;
+            float: right;
+            display: block;
         }
     </style>
 </head>
+
 <body>
     <h1>PDF Text Splitter</h1>
-    <input type="file" id="file-input">
+    <div class="file-input-container">
+        <input type="file" id="file-input">
+        <span id="file-input-pagecount"></span>
+    </div>
     <br>
     <canvas id="pdf-canvas"></canvas>
     <br>
     <button id="split-button">Split PDF</button>
     <div id="output"></div>
+    <button id="download-all-button" style="display: none;">Download All PDFs</button>
 
     <div id="preview-overlay" class="preview-overlay"></div>
     <div id="preview-dialog" class="preview-dialog">
         <button class="close-button" onclick="closePreview()">Close</button>
         <div id="preview-canvas-container"></div>
     </div>
+
+    <div style="height: 100px;"></div>
 
     <script>
         let pdfDoc = null;
@@ -76,15 +97,20 @@
         let isSelecting = false;
         let startX, startY, endX, endY;
 
-        document.getElementById('file-input').addEventListener('change', function(event) {
+        document.getElementById('file-input').addEventListener('change', function (event) {
             let file = event.target.files[0];
+            if (file.type !== 'application/pdf') {
+                alert('Please select a PDF file.');
+                return;
+            }
             let reader = new FileReader();
 
-            reader.onload = function() {
+            reader.onload = function () {
                 pdfBytes = new Uint8Array(this.result);
-                pdfjsLib.getDocument(pdfBytes).promise.then(function(pdf) {
+                pdfjsLib.getDocument(pdfBytes).promise.then(function (pdf) {
                     pdfDoc = pdf;
                     renderPage(1);
+                    displayFileInfo(pdf.numPages);
                 });
             };
 
@@ -92,7 +118,7 @@
         });
 
         function renderPage(pageNumber) {
-            pdfDoc.getPage(pageNumber).then(function(page) {
+            pdfDoc.getPage(pageNumber).then(function (page) {
                 let viewport = page.getViewport({ scale: 1 });
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
@@ -105,7 +131,12 @@
             });
         }
 
-        canvas.addEventListener('mousedown', function(event) {
+        function displayFileInfo(numPages) {
+            const output = document.getElementById('file-input-pagecount');
+            output.textContent = `(Pages: ${numPages})`;
+        }
+
+        canvas.addEventListener('mousedown', function (event) {
             isSelecting = true;
             startX = event.offsetX;
             startY = event.offsetY;
@@ -116,7 +147,7 @@
             selectionBox.style.display = 'block';
         });
 
-        canvas.addEventListener('mousemove', function(event) {
+        canvas.addEventListener('mousemove', function (event) {
             if (isSelecting) {
                 endX = event.offsetX;
                 endY = event.offsetY;
@@ -127,11 +158,11 @@
             }
         });
 
-        canvas.addEventListener('mouseup', function(event) {
+        canvas.addEventListener('mouseup', function (event) {
             isSelecting = false;
         });
 
-        document.getElementById('split-button').addEventListener('click', function() {
+        document.getElementById('split-button').addEventListener('click', function () {
             if (!pdfDoc) {
                 alert('Please select a PDF file.');
                 return;
@@ -155,10 +186,10 @@
             let textSnippets = [];
 
             for (let i = 1; i <= pdfDoc.numPages; i++) {
-                textPromises.push(pdfDoc.getPage(i).then(function(page) {
-                    return page.getTextContent().then(function(textContent) {
+                textPromises.push(pdfDoc.getPage(i).then(function (page) {
+                    return page.getTextContent().then(function (textContent) {
                         let viewport = page.getViewport({ scale: 1 });
-                        let pageText = textContent.items.map(function(item) {
+                        let pageText = textContent.items.map(function (item) {
                             let tx = item.transform;
                             let x = tx[4];
                             let y = viewport.height - tx[5];
@@ -167,11 +198,11 @@
                                 x: x,
                                 y: y
                             };
-                        }).filter(function(item) {
+                        }).filter(function (item) {
                             return item.x >= selection.x &&
-                                   item.x <= selection.x + selection.width &&
-                                   item.y >= selection.y &&
-                                   item.y <= selection.y + selection.height;
+                                item.x <= selection.x + selection.width &&
+                                item.y >= selection.y &&
+                                item.y <= selection.y + selection.height;
                         }).map(item => item.str).join(' ');
 
                         if (pageText !== lastText) {
@@ -201,7 +232,10 @@
             const output = document.getElementById('output');
             output.innerHTML = '<ul>';
 
-            output.addEventListener('click', function(event) {
+            const newOutput = output.cloneNode(true);
+            output.parentNode.replaceChild(newOutput, output);
+
+            newOutput.addEventListener('click', function (event) {
                 if (event.target.tagName === 'BUTTON' && event.target.textContent === 'Preview') {
                     const previewUrl = event.target.getAttribute('data-url');
                     previewPDF(previewUrl);
@@ -231,15 +265,23 @@
                 const previewButton = document.createElement('button');
                 previewButton.textContent = 'Preview';
                 previewButton.setAttribute('data-url', url);
-                previewButton.style.zIndex = '1001'; // ボタンを前面に表示
+
+                const pageCountSpan = document.createElement('span');
+                pageCountSpan.textContent = ` (Pages: ${groups[i].length})`;
 
                 listItem.appendChild(link);
                 listItem.appendChild(snippetSpan);
                 listItem.appendChild(previewButton);
-                output.appendChild(listItem);
+                listItem.appendChild(pageCountSpan);
+                newOutput.appendChild(listItem);
             }
 
-            output.innerHTML += '</ul>';
+            newOutput.innerHTML += '</ul>';
+
+            // Split後にダウンロードボタンを表示
+            if (groups.length > 0) {
+                document.getElementById('download-all-button').style.display = 'block';
+            }
         }
 
         function previewPDF(url) {
@@ -250,14 +292,13 @@
             previewOverlay.style.display = 'block';
             previewDialog.style.display = 'block';
 
-            pdfjsLib.getDocument(url).promise.then(function(pdf) {
-                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                    pdf.getPage(pageNum).then(function(page) {
+            pdfjsLib.getDocument(url).promise.then(function (pdf) {
+                let renderPage = function (pageNum) {
+                    pdf.getPage(pageNum).then(function (page) {
                         let viewport = page.getViewport({ scale: 1 });
                         let previewCanvas = document.createElement('canvas');
                         previewCanvas.height = viewport.height;
                         previewCanvas.width = viewport.width;
-                        previewCanvas.classList.add('preview-canvas-container');
 
                         let previewCtx = previewCanvas.getContext('2d');
 
@@ -265,11 +306,27 @@
                             canvasContext: previewCtx,
                             viewport: viewport
                         };
-                        page.render(renderContext);
+                        page.render(renderContext).promise.then(function () {
+                            previewCanvasContainer.appendChild(previewCanvas);
 
-                        previewCanvasContainer.appendChild(previewCanvas);
+                            // Add a separator line between pages
+                            if (pageNum < pdf.numPages) {
+                                let separator = document.createElement('div');
+                                separator.style.borderTop = '1px solid gray';
+                                separator.style.margin = '10px 0';
+                                previewCanvasContainer.appendChild(separator);
+                            }
+
+                            // Render the next page
+                            if (pageNum < pdf.numPages) {
+                                renderPage(pageNum + 1);
+                            }
+                        });
                     });
-                }
+                };
+
+                // Start rendering from the first page
+                renderPage(1);
             });
         }
 
@@ -279,6 +336,21 @@
             previewDialog.style.display = 'none';
             previewOverlay.style.display = 'none';
         }
+
+        document.getElementById('download-all-button').addEventListener('click', function () {
+            const links = document.querySelectorAll('#output a');
+            links.forEach(link => {
+                const url = link.href;
+                const filename = link.download;
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+        });
     </script>
 </body>
+
 </html>
