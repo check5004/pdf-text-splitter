@@ -15,6 +15,13 @@
         .file-input-container {
             display: flex;
             align-items: center;
+            border: 2px dashed #ccc;
+            padding: 20px;
+            cursor: pointer;
+        }
+
+        .file-input-container.dragover {
+            border-color: #000;
         }
 
         .selection-box {
@@ -73,9 +80,9 @@
 
 <body>
     <h1>PDF Text Splitter</h1>
-    <div class="file-input-container">
-        <input type="file" id="file-input">
-        <span id="file-input-pagecount"></span>
+    <div class="file-input-container" id="file-drop-zone">
+        <input type="file" id="file-input" style="display: none;">
+        <span id="file-input-pagecount">Drag and drop a PDF file here or click to select</span>
     </div>
     <br>
     <canvas id="pdf-canvas"></canvas>
@@ -110,8 +117,28 @@
         let startCX, startCY, endCX, endCY;
 
         // ファイル入力の変更イベントリスナー
-        document.getElementById('file-input').addEventListener('change', function (event) {
-            let file = event.target.files[0];
+        document.getElementById('file-input').addEventListener('change', handleFileSelect);
+        const fileDropZone = document.getElementById('file-drop-zone');
+
+        fileDropZone.addEventListener('click', () => document.getElementById('file-input').click());
+        fileDropZone.addEventListener('dragover', (event) => {
+            event.preventDefault();
+            fileDropZone.classList.add('dragover');
+        });
+        fileDropZone.addEventListener('dragleave', () => fileDropZone.classList.remove('dragover'));
+        fileDropZone.addEventListener('drop', (event) => {
+            event.preventDefault();
+            fileDropZone.classList.remove('dragover');
+            const file = event.dataTransfer.files[0];
+            handleFile(file);
+        });
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            handleFile(file);
+        }
+
+        function handleFile(file) {
             if (file.type !== 'application/pdf') {
                 alert('Please select a PDF file.');
                 return;
@@ -124,12 +151,12 @@
                 pdfjsLib.getDocument(pdfBytes).promise.then(function (pdf) {
                     pdfDoc = pdf;
                     renderPage(1);
-                    displayFileInfo(pdf.numPages);
+                    displayFileInfo(pdf.numPages, file.name);
                 });
             };
 
             reader.readAsArrayBuffer(file);
-        });
+        }
 
         // PDFページをレンダリングする関数
         function renderPage(pageNumber) {
@@ -147,9 +174,9 @@
         }
 
         // ファイル情報を表示する関数
-        function displayFileInfo(numPages) {
+        function displayFileInfo(numPages, fileName) {
             const output = document.getElementById('file-input-pagecount');
-            output.textContent = `(Pages: ${numPages})`;
+            output.textContent = `${fileName} 　 (Pages: ${numPages})`;
         }
 
         // キャンバス上でのマウスダウンイベントリスナー
