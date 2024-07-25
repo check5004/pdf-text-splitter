@@ -23,6 +23,12 @@
             pointer-events: none;
         }
 
+        .continuation-box {
+            border: 2px dashed blue;
+            position: absolute;
+            pointer-events: none;
+        }
+
         .preview-dialog {
             display: none;
             position: fixed;
@@ -87,6 +93,7 @@
     <div style="height: 100px;"></div>
 
     <script>
+        // PDFドキュメントとキャンバスの初期設定
         let pdfDoc = null;
         let pdfBytes = null;
         let canvas = document.getElementById('pdf-canvas');
@@ -94,9 +101,15 @@
         let selectionBox = document.createElement('div');
         selectionBox.classList.add('selection-box');
         document.body.appendChild(selectionBox);
+        let continuationBox = document.createElement('div');
+        continuationBox.classList.add('continuation-box');
+        document.body.appendChild(continuationBox);
         let isSelecting = false;
+        let isSelectingContinuation = false;
         let startX, startY, endX, endY;
+        let startCX, startCY, endCX, endCY;
 
+        // ファイル入力の変更イベントリスナー
         document.getElementById('file-input').addEventListener('change', function (event) {
             let file = event.target.files[0];
             if (file.type !== 'application/pdf') {
@@ -105,6 +118,7 @@
             }
             let reader = new FileReader();
 
+            // ファイル読み込み完了時の処理
             reader.onload = function () {
                 pdfBytes = new Uint8Array(this.result);
                 pdfjsLib.getDocument(pdfBytes).promise.then(function (pdf) {
@@ -117,6 +131,7 @@
             reader.readAsArrayBuffer(file);
         });
 
+        // PDFページをレンダリングする関数
         function renderPage(pageNumber) {
             pdfDoc.getPage(pageNumber).then(function (page) {
                 let viewport = page.getViewport({ scale: 1 });
@@ -131,22 +146,36 @@
             });
         }
 
+        // ファイル情報を表示する関数
         function displayFileInfo(numPages) {
             const output = document.getElementById('file-input-pagecount');
             output.textContent = `(Pages: ${numPages})`;
         }
 
+        // キャンバス上でのマウスダウンイベントリスナー
         canvas.addEventListener('mousedown', function (event) {
-            isSelecting = true;
-            startX = event.offsetX;
-            startY = event.offsetY;
-            selectionBox.style.left = `${startX + canvas.offsetLeft}px`;
-            selectionBox.style.top = `${startY + canvas.offsetTop}px`;
-            selectionBox.style.width = '0px';
-            selectionBox.style.height = '0px';
-            selectionBox.style.display = 'block';
+            if (event.shiftKey) {
+                isSelectingContinuation = true;
+                startCX = event.offsetX;
+                startCY = event.offsetY;
+                continuationBox.style.left = `${startCX + canvas.offsetLeft}px`;
+                continuationBox.style.top = `${startCY + canvas.offsetTop}px`;
+                continuationBox.style.width = '0px';
+                continuationBox.style.height = '0px';
+                continuationBox.style.display = 'block';
+            } else {
+                isSelecting = true;
+                startX = event.offsetX;
+                startY = event.offsetY;
+                selectionBox.style.left = `${startX + canvas.offsetLeft}px`;
+                selectionBox.style.top = `${startY + canvas.offsetTop}px`;
+                selectionBox.style.width = '0px';
+                selectionBox.style.height = '0px';
+                selectionBox.style.display = 'block';
+            }
         });
 
+        // キャンバス上でのマウスムーブイベントリスナー
         canvas.addEventListener('mousemove', function (event) {
             if (isSelecting) {
                 endX = event.offsetX;
@@ -155,13 +184,23 @@
                 selectionBox.style.height = `${Math.abs(endY - startY)}px`;
                 selectionBox.style.left = `${Math.min(startX, endX) + canvas.offsetLeft}px`;
                 selectionBox.style.top = `${Math.min(startY, endY) + canvas.offsetTop}px`;
+            } else if (isSelectingContinuation) {
+                endCX = event.offsetX;
+                endCY = event.offsetY;
+                continuationBox.style.width = `${Math.abs(endCX - startCX)}px`;
+                continuationBox.style.height = `${Math.abs(endCY - startCY)}px`;
+                continuationBox.style.left = `${Math.min(startCX, endCX) + canvas.offsetLeft}px`;
+                continuationBox.style.top = `${Math.min(startCY, endCY) + canvas.offsetTop}px`;
             }
         });
 
+        // キャンバス上でのマウスアップイベントリスナー
         canvas.addEventListener('mouseup', function (event) {
             isSelecting = false;
+            isSelectingContinuation = false;
         });
 
+        // PDF分割ボタンのクリックイベントリスナー
         document.getElementById('split-button').addEventListener('click', function () {
             if (!pdfDoc) {
                 alert('Please select a PDF file.');
@@ -175,15 +214,20 @@
                 height: parseFloat(selectionBox.style.height)
             };
 
-            extractTextAndSplit(selection);
+            let continuationSelection = {
+                x: parseFloat(continuationBox.style.left) - canvas.offsetLeft,
+                y: parseFloat(continuationBox.style.top) - canvas.offsetTop,
+                width: parseFloat(continuationBox.style.width),
+                height: parseFloat(continuationBox.style.height)
+            };
+
+            extractTextAndSplit(selection, continuationSelection);
         });
 
-        async function extractTextAndSplit(selection) {
+        // 選択範囲のテキストを抽出し、PDFを分割する関数
+        async function extractTextAndSplit(selection, continuationSelection) {
             let textPromises = [];
-            let splitGroups = [];
-            let currentGroup = [];
-            let lastText = '';
-            let textSnippets = [];
+            let pages = [];
 
             for (let i = 1; i <= pdfDoc.numPages; i++) {
                 textPromises.push(pdfDoc.getPage(i).then(function (page) {
@@ -205,29 +249,88 @@
                                 item.y <= selection.y + selection.height;
                         }).map(item => item.str).join(' ');
 
-                        if (pageText !== lastText) {
-                            if (currentGroup.length > 0) {
-                                splitGroups.push(currentGroup);
-                                textSnippets.push(lastText);
-                            }
-                            currentGroup = [i];
-                            lastText = pageText;
-                        } else {
-                            currentGroup.push(i);
-                        }
+                        let continuationText = textContent.items.map(function (item) {
+                            let tx = item.transform;
+                            let x = tx[4];
+                            let y = viewport.height - tx[5];
+                            return {
+                                str: item.str,
+                                x: x,
+                                y: y
+                            };
+                        }).filter(function (item) {
+                            return item.x >= continuationSelection.x &&
+                                item.x <= continuationSelection.x + continuationSelection.width &&
+                                item.y >= continuationSelection.y &&
+                                item.y <= continuationSelection.y + continuationSelection.height;
+                        }).map(item => item.str).join(' ');
+
+                        pages.push({
+                            pageNumber: i,
+                            redText: pageText,
+                            blueText: continuationText
+                        });
                     });
                 }));
             }
 
             await Promise.all(textPromises);
-            if (currentGroup.length > 0) {
-                splitGroups.push(currentGroup);
-                textSnippets.push(lastText);
+
+            // ページオブジェクトをページ番号でソート
+            pages.sort((a, b) => a.pageNumber - b.pageNumber);
+
+            // ページオブジェクトからファイル単位のページ番号を抽出
+            let files = [];
+            let currentFile = [];
+            let lastRedText = '';
+            let lastBlueText = '';
+
+            pages.forEach(page => {
+                if (page.redText !== lastRedText || page.blueText !== lastBlueText) {
+                    if (currentFile.length > 0) {
+                        files.push(currentFile);
+                    }
+                    currentFile = [page.pageNumber];
+                    lastRedText = page.redText;
+                    lastBlueText = page.blueText;
+                } else {
+                    currentFile.push(page.pageNumber);
+                }
+            });
+
+            if (currentFile.length > 0) {
+                files.push(currentFile);
             }
-            createPDFs(splitGroups, textSnippets, pdfBytes);
+
+            // 続きページを前のファイルに結合
+            let mergedFiles = [];
+            let lastFile = [];
+            let ignoreContinuation = false;
+
+            files.forEach(file => {
+                if (lastFile.length > 0 && !ignoreContinuation &&
+                    pages[file[0] - 1].redText !== pages[lastFile[lastFile.length - 1] - 1].redText &&
+                    pages[file[0] - 1].blueText !== pages[lastFile[lastFile.length - 1] - 1].blueText) {
+                    lastFile.push(...file);
+                    ignoreContinuation = true; // 続きページを無視するフラグを立てる
+                } else {
+                    if (lastFile.length > 0) {
+                        mergedFiles.push(lastFile);
+                    }
+                    lastFile = file;
+                    ignoreContinuation = false; // 新しいファイルの開始時にフラグをリセット
+                }
+            });
+
+            if (lastFile.length > 0) {
+                mergedFiles.push(lastFile);
+            }
+
+            createPDFs(mergedFiles, pages, pdfBytes);
         }
 
-        async function createPDFs(groups, textSnippets, pdfBytes) {
+        // 分割されたPDFを作成する関数
+        async function createPDFs(files, pages, pdfBytes) {
             const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
             const output = document.getElementById('output');
             output.innerHTML = '<ul>';
@@ -242,9 +345,9 @@
                 }
             });
 
-            for (let i = 0; i < groups.length; i++) {
+            for (let i = 0; i < files.length; i++) {
                 const newPdfDoc = await PDFLib.PDFDocument.create();
-                const pagesToInclude = await newPdfDoc.copyPages(pdfDoc, groups[i].map(p => p - 1));
+                const pagesToInclude = await newPdfDoc.copyPages(pdfDoc, files[i].map(p => p - 1));
                 pagesToInclude.forEach(page => {
                     newPdfDoc.addPage(page);
                 });
@@ -260,14 +363,14 @@
                 link.textContent = `Download split_part_${i + 1}.pdf`;
 
                 const snippetSpan = document.createElement('span');
-                snippetSpan.textContent = ` (Snippet: ${textSnippets[i]})`;
+                snippetSpan.textContent = ` (Snippet: ${pages[files[i][0] - 1].redText})`;
 
                 const previewButton = document.createElement('button');
                 previewButton.textContent = 'Preview';
                 previewButton.setAttribute('data-url', url);
 
                 const pageCountSpan = document.createElement('span');
-                pageCountSpan.textContent = ` (Pages: ${groups[i].length})`;
+                pageCountSpan.textContent = ` (Pages: ${files[i].length})`;
 
                 listItem.appendChild(link);
                 listItem.appendChild(snippetSpan);
@@ -279,11 +382,12 @@
             newOutput.innerHTML += '</ul>';
 
             // Split後にダウンロードボタンを表示
-            if (groups.length > 0) {
+            if (files.length > 0) {
                 document.getElementById('download-all-button').style.display = 'block';
             }
         }
 
+        // PDFをプレビューする関数
         function previewPDF(url) {
             const previewCanvasContainer = document.getElementById('preview-canvas-container');
             previewCanvasContainer.innerHTML = ''; // Clear previous content
@@ -330,6 +434,7 @@
             });
         }
 
+        // プレビューを閉じる関数
         function closePreview() {
             const previewDialog = document.getElementById('preview-dialog');
             const previewOverlay = document.getElementById('preview-overlay');
@@ -337,6 +442,7 @@
             previewOverlay.style.display = 'none';
         }
 
+        // 全てのPDFをダウンロードするボタンのクリックイベントリスナー
         document.getElementById('download-all-button').addEventListener('click', function () {
             const links = document.querySelectorAll('#output a');
             links.forEach(link => {
